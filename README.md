@@ -10,7 +10,7 @@ Copy this folder into your Sylvanas scripts directory as `Master_Farmer_Grindbot
 
 ## Install the HTTP runner (1.4.0)
 
-Use the sibling plugin `Master_Farmer_Grindbot_v1.4.0`. That plugin:
+Copy `bootstrap/` from this repo into your Sylvanas scripts directory as `Master_Farmer_Grindbot_v1.4.0` (or use the sibling folder of that name). That plugin:
 
 1. GETs `manifest.json` from this repo
 2. GETs each listed `.lua` file from `raw.githubusercontent.com`
