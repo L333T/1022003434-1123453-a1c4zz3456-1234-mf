@@ -34,6 +34,7 @@ local inventory_helper = require("common/utility/inventory_helper")
 ---@type vec3
 local vec3 = require("common/geometry/vector_3")
 
+local consumables = require("data/consumables")
 local gui = require("gui")
 local state = require("state")
 local supplies = require("supplies")
@@ -43,12 +44,40 @@ local rotation = require("rotation")
 
 local vendor = {}
 
+-- ASSUMPTIONS:
+-- core.quests.get_item_info().class_id carries Blizzard's item class ID, where 0
+-- is Consumable. The stub documents the field but not its values, so the English
+-- item_type string is checked as a fallback before anything is sold.
+local ITEM_CLASS_CONSUMABLE = 0
+
 local HEARTHSTONE = 6948
 local SELL_GAP = 0.40
 local INTERACT_GAP = 1.20
 local DONE_COOLDOWN = 90.0
 local ARRIVE = 5.0
 local FIND_RANGE = 12.0
+local REPAIR_GAP = 0.60
+local REPAIR_PASSES = 2
+local BUY_QTY = 5
+local MAX_BUYS = 12
+local COUNT_GAP = 1.0
+local NO_STOCK_COOLDOWN = 300.0
+
+local function id_set(list)
+    local set = {}
+    if type(list) ~= "table" then
+        return set
+    end
+    for i = 1, #list do
+        if type(list[i]) == "number" then
+            set[list[i]] = true
+        end
+    end
+    return set
+end
+
+local FOOD_SET = id_set(consumables.FOOD_ITEM_IDS)
+local DRINK_SET = id_set(consumables.WATER_ITEM_IDS)
 
 local function safe(fn)
     local ok, result = pcall(fn)
@@ -189,6 +218,55 @@ local function worst_durability()
     return worst, broken
 end
 
+local count_cache = {}
+
+local function bag_total(set)
+    local now = izi.now()
+    local cached = count_cache[set]
+    if cached and (now - cached.at) < COUNT_GAP then
+        return cached.value
+    end
+    local total = 0
+    for bag = 0, 4 do
+        local items = safe(function() return core.inventory.get_items_in_bag(bag) end)
+        if type(items) == "table" then
+            for i = 1, #items do
+                local slot = items[i]
+                local obj = type(slot) == "table" and slot.object or nil
+                if obj then
+                    local id = safe(function() return obj:get_item_id() end)
+                    if type(id) == "number" and set[id] then
+                        local stack = safe(function() return obj:get_item_stack_count() end)
+                        if type(stack) ~= "number" or stack < 1 then
+                            stack = 1
+                        end
+                        total = total + stack
+                    end
+                end
+            end
+        end
+    end
+    count_cache[set] = { at = now, value = total }
+    return total
+end
+
+local function has_mana(player)
+    local maxm = safe(function() return player:mana_max() end)
+    return type(maxm) == "number" and maxm > 0
+end
+
+local function wants_stock(player)
+    if gui.is_on("buy_food") ~= true then
+        return false, false
+    end
+    local need_food = bag_total(FOOD_SET) < gui.slider("food_count", 20)
+    local need_drink = false
+    if has_mana(player) then
+        need_drink = bag_total(DRINK_SET) < gui.slider("drink_count", 20)
+    end
+    return need_food, need_drink
+end
+
 local function merchant_open()
     local count = safe(function() return core.game_ui.get_vendor_item_count() end) or 0
     if type(count) == "number" and count > 0 then
@@ -218,6 +296,44 @@ local function keep_ids(player)
     return ids
 end
 
+local keep_text = nil
+local keep_custom = {}
+
+local function custom_keep_ids()
+    local text = safe(function() return gui.keep_items() end)
+    if type(text) ~= "string" then
+        text = ""
+    end
+    if text == keep_text then
+        return keep_custom
+    end
+    keep_text = text
+    keep_custom = {}
+    for token in string.gmatch(text, "[^,%s]+") do
+        local id = tonumber(token)
+        if type(id) == "number" and id > 0 then
+            keep_custom[math.floor(id)] = true
+        end
+    end
+    return keep_custom
+end
+
+-- Food, drink, potions, bandages, and elixirs all share the Consumable class, so
+-- the whole class is protected instead of matching item ID lists.
+local function is_consumable(info)
+    if type(info) ~= "table" then
+        return false
+    end
+    if info.class_id == ITEM_CLASS_CONSUMABLE then
+        return true
+    end
+    local kind = info.item_type
+    if type(kind) == "string" and string.lower(kind) == "consumable" then
+        return true
+    end
+    return false
+end
+
 local function quality_ok(quality)
     if type(quality) ~= "number" then
         return false
@@ -242,8 +358,14 @@ local function should_sell_item(player, item_id)
     if keep[item_id] then
         return false
     end
+    if custom_keep_ids()[item_id] then
+        return false
+    end
     local info = safe(function() return core.quests.get_item_info(item_id) end)
     if type(info) ~= "table" then
+        return false
+    end
+    if is_consumable(info) then
         return false
     end
     local price = info.sell_price
@@ -274,6 +396,73 @@ local function sell_one(player)
         end
     end
     return false
+end
+
+-- Highest required level the player can still use is the best rank the vendor
+-- carries, which mirrors picking the top GetItemInfo required level.
+local function buy_best(player, set)
+    local count = safe(function() return core.game_ui.get_vendor_item_count() end)
+    if type(count) ~= "number" or count <= 0 then
+        return false
+    end
+    local level = safe(function() return player:get_level() end) or 1
+    local best_index, best_req, best_cost, best_name = nil, -1, 0, nil
+    for i = 1, count do
+        local info = safe(function() return core.game_ui.get_vendor_item_info(i) end)
+        if type(info) == "table" and type(info.item_id) == "number" and set[info.item_id] then
+            local item = safe(function() return core.quests.get_item_info(info.item_id) end)
+            local req = 0
+            if type(item) == "table" and type(item.min_level) == "number" then
+                req = item.min_level
+            end
+            if req <= level and req > best_req then
+                best_req = req
+                best_index = info.vendor_item_index or i
+                best_cost = type(info.cost) == "number" and info.cost or 0
+                best_name = info.item_name or tostring(info.item_id)
+            end
+        end
+    end
+    if type(best_index) ~= "number" then
+        return false
+    end
+    local total_cost = best_cost * BUY_QTY
+    local gold = safe(function() return core.inventory.get_gold() end) or 0
+    -- lack_gold stays reserved for repairs, which gate the trip itself.
+    if total_cost > 0 and type(gold) == "number" and gold < total_cost then
+        state.set_note("Vendor", "Need more gold for " .. tostring(best_name))
+        return false
+    end
+    pcall(function()
+        core.input.buy_item(best_index, BUY_QTY)
+    end)
+    count_cache = {}
+    state.set_note("Vendor", "Bought " .. tostring(best_name) .. " x" .. tostring(BUY_QTY))
+    return true
+end
+
+local function try_buy(player)
+    local need_food, need_drink = wants_stock(player)
+    if not need_food and not need_drink then
+        return false
+    end
+    if (state.vendor.buys or 0) >= MAX_BUYS or bag_free() <= 0 then
+        return false
+    end
+    local bought = false
+    if need_food then
+        bought = buy_best(player, FOOD_SET)
+    end
+    if not bought and need_drink then
+        bought = buy_best(player, DRINK_SET)
+    end
+    if not bought then
+        -- This merchant carries nothing usable, so stop coming back for a while.
+        state.vendor.no_stock_until = izi.now() + NO_STOCK_COOLDOWN
+        return false
+    end
+    state.vendor.buys = (state.vendor.buys or 0) + 1
+    return true
 end
 
 local function gossip_open()
@@ -362,6 +551,8 @@ local function finish_trip(note)
     state.vendor.lap_due = false
     state.vendor.active = false
     state.vendor.repaired = false
+    state.vendor.repairs = 0
+    state.vendor.buys = 0
     state.vendor.sold = 0
     state.vendor.interact_until = 0
     state.vendor.done_until = izi.now() + DONE_COOLDOWN
@@ -377,6 +568,9 @@ end
 function vendor.reset()
     state.vendor.active = false
     state.vendor.repaired = false
+    state.vendor.repairs = 0
+    state.vendor.buys = 0
+    state.vendor.no_stock_until = 0
     state.vendor.sold = 0
     state.vendor.interact_until = 0
     state.vendor.done_until = 0
@@ -412,7 +606,7 @@ function vendor.needs_trip(player)
     if not player then
         return false
     end
-    if not gui.is_on("sell") and not gui.is_on("repair") then
+    if not gui.is_on("sell") and not gui.is_on("repair") and not gui.is_on("buy_food") then
         return false
     end
 
@@ -427,6 +621,12 @@ function vendor.needs_trip(player)
     end
     if izi.now() < (state.vendor.done_until or 0) and not state.vendor.active then
         return false
+    end
+    if izi.now() >= (state.vendor.no_stock_until or 0) then
+        local need_food, need_drink = wants_stock(player)
+        if need_food or need_drink then
+            return true
+        end
     end
     if gui.is_on("sell") then
         local need_slots = gui.slider("bag_free", 1)
@@ -460,7 +660,7 @@ function vendor.tick(player)
     if not player then
         return false
     end
-    if not gui.is_on("sell") and not gui.is_on("repair") then
+    if not gui.is_on("sell") and not gui.is_on("repair") and not gui.is_on("buy_food") then
         if state.vendor.active then
             vendor.reset()
         end
@@ -485,6 +685,8 @@ function vendor.tick(player)
         state.vendor.active = true
         supplies.reset()
         state.vendor.repaired = false
+        state.vendor.repairs = 0
+        state.vendor.buys = 0
         state.vendor.sold = 0
         state.vendor.wait_npc = 0
         state.vendor.tries = 0
@@ -527,16 +729,29 @@ function vendor.tick(player)
                 local gold = safe(function() return core.inventory.get_gold() end) or 0
                 if type(cost) == "number" and type(gold) == "number" and cost > gold then
                     state.vendor.lack_gold = cost
+                    state.vendor.repaired = true
                     state.set_note("Vendor", "Need more gold to repair")
+                elseif type(cost) == "number" and cost <= 0 then
+                    state.vendor.repaired = true
                 else
                     pcall(function()
                         core.input.repair_all_items(false)
                     end)
+                    -- A single call can miss slots, so repair runs a second pass.
+                    state.vendor.repairs = (state.vendor.repairs or 0) + 1
+                    if state.vendor.repairs >= REPAIR_PASSES then
+                        state.vendor.repaired = true
+                    end
                     state.set_note("Vendor", "Repair")
                 end
+            else
+                state.vendor.repaired = true
             end
-            state.vendor.repaired = true
-            state.vendor.interact_until = now + 0.60
+            state.vendor.interact_until = now + REPAIR_GAP
+            return true
+        end
+        if try_buy(player) then
+            state.vendor.interact_until = now + SELL_GAP
             return true
         end
         finish_trip("Vendor done")

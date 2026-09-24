@@ -90,10 +90,11 @@ function healing.tick(player)
             local hp = health_pct(player)
             local mana = mana_pct(player)
             local has_mana = (safe(function() return player:mana_max() end) or 0) > 0
-            if hp <= gui.slider("hp_pot", 35) then
+            local casting = safe(function() return player:is_channeling_or_casting() end) == true
+            if not casting and hp <= gui.slider("hp_pot", 35) then
                 izi.use_best_health_potion_safe()
             end
-            if has_mana and mana <= gui.slider("mp_pot", 20) then
+            if not casting and has_mana and mana <= gui.slider("mp_pot", 20) then
                 izi.use_best_mana_potion_safe()
             end
         end

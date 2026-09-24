@@ -122,6 +122,15 @@ local function enemy_units(player, pos, range)
     return {}
 end
 
+--- Raw hostile list around the player, before any combat or level filtering.
+function targeting.enemy_list(player, range)
+    if not player then
+        return {}
+    end
+    local pos = state.cached_pos or safe(function() return player:get_position() end)
+    return enemy_units(player, pos, tonumber(range) or 40)
+end
+
 function targeting.find_mobs(player, mobs, range, pve_only, opts)
     local found = {}
     if not player then

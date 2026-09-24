@@ -233,6 +233,9 @@ is the lookup key and cannot be translated away without breaking that.
 | 绿色 | Sell green quality | `mfg_sell_green` |
 | 卖物格数 | Free bag slots before a vendor trip | `mfg_bag_free` |
 | 修理耐久度 | Repair below durability % | `mfg_repair_pct` |
+| 保留物品 | Item IDs that must not be sold | `mfg_keep_items` |
+| 食物保留数量 | Food stacks to keep | `mfg_food_count` |
+| 饮料保留数量 | Drink stacks to keep | `mfg_drink_count` |
 | 法师Ice Barrier | Mage: Ice Barrier | `mfg_ice_barrier` |
 | 法师Mana Sheild | Mage: Mana Shield *(typo in source)* | `mfg_mana_shield` |
 | 法师Ice Armor | Mage: Ice Armor | `mfg_ice_armor` |
