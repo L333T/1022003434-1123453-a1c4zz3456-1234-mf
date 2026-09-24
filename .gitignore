@@ -1,0 +1,19 @@
+# Local backups - kept on disk, never published.
+# make_manifest.py already skips these, so committing them would only add weight
+# and risk someone requiring a stale movement.lua copy by mistake.
+.bak_pre_movement2/
+*.bak
+*.orig
+*.rej
+
+# Tooling droppings
+__pycache__/
+*.pyc
+dist/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+desktop.ini
