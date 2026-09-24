@@ -1,0 +1,28 @@
+# ============================================================================
+# Line endings are load-bearing here, not cosmetic.
+#
+# net_loader.lua verifies an Adler-32 of exactly the bytes raw.githubusercontent
+# serves, and make_manifest.py hashes LF-normalised bytes. If a .lua file were
+# ever stored with CRLF, every byte count and every hash would shift and the
+# loader would reject the whole download as corrupt.
+#
+# `eol=lf` forces LF in the stored blob AND in the working tree, so the manifest
+# you generate locally matches the bytes the CDN hands out. Do not remove this.
+# ============================================================================
+*.lua   text eol=lf
+*.py    text eol=lf
+*.md    text eol=lf
+
+# BINARIES MUST BE EXEMPT.
+#
+# `* text=auto` applied to plugin_loader.zip as well, so git was line-ending
+# processing a binary archive: the copy GitHub served came back 15,583 bytes
+# against 15,506 on disk. It happened to still open, but that was luck - a zip
+# whose bytes look more like text gets silently corrupted and will not extract.
+*.zip   binary
+*.png   binary
+*.7z    binary
+*.ico   binary
+
+# Everything else: let git decide.
+*       text=auto

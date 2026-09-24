@@ -6,7 +6,14 @@ Generate manifest.lua for net_loader.lua.
     python make_manifest.py movement        # only movement/ + movement.lua
     python make_manifest.py --out dist/manifest.lua
 
-The hash is Adler-32, which is exactly what net_loader.lua computes in Lua.
+The hash is Adler-32, which is exactly what net_loader.lua computes in Lua, so
+there is no second implementation to keep in sync: zlib.adler32 IS the reference.
+
+Upload manifest.lua next to the .lua tree at the same base URL, e.g.
+
+    https://cdn.example.com/mfg/1.3.38/manifest.lua
+    https://cdn.example.com/mfg/1.3.38/movement.lua
+    https://cdn.example.com/mfg/1.3.38/movement/steer.lua
 """
 
 import argparse
@@ -14,9 +21,23 @@ import os
 import sys
 import zlib
 
-SKIP_DIRS = {".git", ".bak_pre_movement2", "__pycache__", ".vscode", ".idea", "dist", "bootstrap"}
+# Never shipped: local backups, tooling, VCS, editor droppings.
+SKIP_DIRS = {".git", ".bak_pre_movement2", "__pycache__", ".vscode", ".idea", "dist", "bootstrap", "plugin_loader", "_MF"}
 SKIP_SUFFIX = (".bak", ".pre_rewrite.bak", ".monolith.bak", ".orig", ".rej")
-SKIP_FILES = {"manifest.lua", "net_loader.lua", "json.lua", "http_runtime.lua"}
+
+# The manifest cannot list itself, and net_loader.lua cannot bootstrap itself:
+# both must already be on disk before the first request goes out.
+SKIP_FILES = {
+    "manifest.lua", "net_loader.lua",
+    # Unreachable from main.lua: leveling_paths has no caller, and the only
+    # thing that required data/_zones_raw was leveling_paths. _zones_raw is
+    # also the one file that pulls ALL FOUR race zone tables at once, where
+    # grind/zone_lookup loads just the race being played - so shipping it
+    # would put ~38 KB of zone data into package.preload for nothing.
+    # Verified with a transitive require trace from main.lua before removing.
+    "leveling_paths.lua",
+    "data/_zones_raw.lua",
+}
 
 
 def version_of(root):
@@ -63,6 +84,9 @@ def main():
     rows, total = [], 0
     for rel in files:
         data = open(os.path.join(root, rel), "rb").read()
+        # Normalise CRLF -> LF. The server may or may not rewrite line endings;
+        # hashing the normalised bytes makes the manifest stable either way.
+        # net_loader hashes exactly what the wire delivered, so serve LF files.
         data = data.replace(b"\r\n", b"\n")
         h = zlib.adler32(data) & 0xFFFFFFFF
         rows.append((rel, f"{h:08x}", len(data)))

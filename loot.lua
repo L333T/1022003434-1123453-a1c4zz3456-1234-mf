@@ -3,8 +3,8 @@
 -- Corpse loot after a kill (IZI: enemies_if, can_be_looted, has_loot, loot_object)
 -- ============================================================================
 -- Authors: BLIZZ - Anthonyk
--- Version: 1.3.38
--- Folder: Master_Farmer_Grindbot_v1.3.38
+-- Version: 2.2.0
+-- Folder: Master_Farmer_Grindbot_v2.2.0
 -- ============================================================================
 
 ---@type izi_api
@@ -103,8 +103,8 @@ local function fire_loot(corpse)
     end
     if movement and type(movement.pause_for_loot) == "function" then
         movement.pause_for_loot(PAUSE_SEC)
-    elseif movement and type(movement.stop) == "function" then
-        movement.stop()
+    elseif movement and type(movement.nav_stop) == "function" then
+        movement.nav_stop()
     end
 end
 
@@ -190,6 +190,18 @@ local function pick_corpse(player, mine_only)
 end
 
 function loot.tick(player)
+    -- Defence in depth for the cascade order in main.lua. Walking to a corpse
+    -- cancels eating and drinking, so looting never runs during a rest even if
+    -- that ordering is changed later. Required lazily: healing.lua requires
+    -- rotation, so a top-level require here would close a cycle.
+    do
+        local ok_h, healing = pcall(require, "healing")
+        if ok_h and healing and type(healing.is_resting) == "function" then
+            if healing.is_resting() == true then
+                return false
+            end
+        end
+    end
     if not gui or not gui.is_on("loot") then
         return false
     end
@@ -219,8 +231,10 @@ function loot.tick(player)
 
     if dist > INTERACT_YARDS then
         local ok_pos, pos = pcall(corpse.get_position, corpse)
-        if ok_pos and pos and movement and type(movement.move_to) == "function" then
-            movement.move_to(pos)
+        -- Only claim the tick when movement actually accepted the walk. If the
+        -- combat controller owns the player, nav_to is refused - returning true
+        -- there would swallow the tick and starve the combat rotation.
+        if ok_pos and pos and movement and movement.nav_to(pos) then
             state.set_note("Loot", "Walking to corpse")
             return true
         end
@@ -234,8 +248,8 @@ function loot.tick(player)
         return true
     end
     if result == "wait" then
-        if movement and type(movement.stop_if_moving) == "function" then
-            movement.stop_if_moving()
+        if movement and type(movement.nav_stop) == "function" then
+            movement.nav_stop()
         end
         state.set_note("Loot", "Looting")
         return true

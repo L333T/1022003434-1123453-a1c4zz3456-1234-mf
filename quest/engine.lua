@@ -3,8 +3,8 @@
 -- Quest engine — starter slice from quest/data only. Never runs grind.
 -- ============================================================================
 -- Authors: BLIZZ - Anthonyk
--- Version: 1.3.37
--- Folder: Master_Farmer_Grindbot_v1.3.37
+-- Version: 2.2.0
+-- Folder: Master_Farmer_Grindbot_v2.2.0
 -- ASSUMPTIONS: Undertaker Mordo=1568, Sarvis=1569, Kaltunk=10176, Gornek=3143
 -- ============================================================================
 
@@ -106,7 +106,7 @@ end
 
 local function npc_line(player, npc_id)
     if type(npc_id) ~= "number" or npc_id <= 0 then
-        return "—"
+        return "-"
     end
     local name = npc.name_of(player, npc_id)
     if type(name) == "string" and name ~= "" then
@@ -118,8 +118,8 @@ end
 local function leave_hunt()
     hunt_kill_until = 0
     if state.target and state.target.kind == "kill" then
-        if movement and type(movement.end_engage) == "function" then
-            movement.end_engage()
+        if movement and type(movement.combat_release) == "function" then
+            movement.combat_release()
         end
         state.reset_target()
     end
@@ -139,41 +139,41 @@ end
 local function fight_unit(player, unit, note)
     local now = izi.now()
     if not unit or safe(function() return unit:is_valid() end) ~= true then
-        if movement and type(movement.stop_if_moving) == "function" then
-            movement.stop_if_moving()
+        if movement and type(movement.nav_stop) == "function" then
+            movement.nav_stop()
         end
-        if movement and type(movement.end_engage) == "function" then
-            movement.end_engage()
+        if movement and type(movement.combat_release) == "function" then
+            movement.combat_release()
         end
         state.reset_target()
         return false
     end
     if hunt_kill_until > 0 and now > hunt_kill_until and state.target.kind == "kill" then
         state.mark_killed(state.target.guid)
-        if movement and type(movement.stop_if_moving) == "function" then
-            movement.stop_if_moving()
+        if movement and type(movement.nav_stop) == "function" then
+            movement.nav_stop()
         end
-        if movement and type(movement.end_engage) == "function" then
-            movement.end_engage()
+        if movement and type(movement.combat_release) == "function" then
+            movement.combat_release()
         end
         state.reset_target()
         return false
     end
     if safe(function() return unit:is_dead_or_ghost() end) == true or safe(function() return unit:is_dead() end) == true then
         state.mark_killed(state.target.guid or safe(function() return unit:get_guid() end))
-        if movement and type(movement.stop_if_moving) == "function" then
-            movement.stop_if_moving()
+        if movement and type(movement.nav_stop) == "function" then
+            movement.nav_stop()
         end
-        if movement and type(movement.end_engage) == "function" then
-            movement.end_engage()
+        if movement and type(movement.combat_release) == "function" then
+            movement.combat_release()
         end
         state.reset_target()
         return false
     end
     local dist = safe(function() return player:distance_to(unit) end) or 99
     if dist > 1000 then
-        if movement and type(movement.end_engage) == "function" then
-            movement.end_engage()
+        if movement and type(movement.combat_release) == "function" then
+            movement.combat_release()
         end
         state.reset_target()
         return false
@@ -183,23 +183,23 @@ local function fight_unit(player, unit, note)
     end)
     local yards = combat_yards(player)
     targeting.start_auto_attack(player, unit)
-    if not movement.chase_unit(player, unit, yards) then
+    if not movement.combat_engage(player, unit, yards) then
         if state.is_unreachable and state.is_unreachable(state.target.guid) then
-            if movement and type(movement.end_engage) == "function" then
-                movement.end_engage()
+            if movement and type(movement.combat_release) == "function" then
+                movement.combat_release()
             end
             state.reset_target()
             state.set_note("Quest", "Skip unreachable")
             return false
         end
-        movement.face_combat(unit)
+        movement.face(unit)
         state.set_note("Quest", note or "Closing")
-        rotation.tick(player, unit, { enemies = targeting.combat_scan(player, yards) })
+        rotation.tick(player, unit, { enemies = targeting.combat_scan(player, yards), no_move = true })
         return true
     end
-    movement.face_combat(unit)
+    movement.face(unit)
     state.set_note("Quest", note or "Killing")
-    rotation.tick(player, unit, { enemies = targeting.combat_scan(player, yards) })
+    rotation.tick(player, unit, { enemies = targeting.combat_scan(player, yards), no_move = true })
     return true
 end
 
@@ -214,14 +214,14 @@ local function hunt_tick(player, row)
         hunt_move = 1
         hunt_scan_until = 0
         hunt_kill_until = 0
-        if movement and type(movement.end_engage) == "function" then
-            movement.end_engage()
+        if movement and type(movement.combat_release) == "function" then
+            movement.combat_release()
         end
         state.reset_target()
     end
     if healing and type(healing.is_resting) == "function" and healing.is_resting() then
-        if movement and type(movement.stop_if_moving) == "function" then
-            movement.stop_if_moving()
+        if movement and type(movement.nav_stop) == "function" then
+            movement.nav_stop()
         end
         pcall(function()
             core.input.stop_attack()
@@ -288,7 +288,7 @@ local function hunt_tick(player, row)
         movement.clear_fail()
         return
     end
-    if movement.is_quiet() or (movement.patrol_blocked and movement.patrol_blocked()) then
+    if movement.is_quiet() or movement.in_combat_movement() then
         state.set_note("Quest", "Nav settle")
         return
     end
@@ -297,7 +297,7 @@ local function hunt_tick(player, row)
         return
     end
     state.set_note("Quest", "Kill for " .. (row.name or tostring(row.id)))
-    movement.move_direct(pos)
+    movement.nav_to(pos, true)
 end
 
 function quest.is_ready(player)
@@ -410,9 +410,9 @@ function quest.snapshot(player)
     end
     local complete = false
     if selected and selected.id and on_it then
-        complete = npc.is_complete(selected.id) == true
+        complete = npc.is_complete(selected.id, selected.name) == true
     end
-    local phase = "—"
+    local phase = "-"
     if selected then
         if skipped_id(selected.id) then
             phase = "Skipped"
@@ -468,16 +468,16 @@ function quest.tick(player)
     if not on_it then
         leave_hunt()
         state.set_note("Quest", "Accept " .. (current.name or tostring(current.id)))
-        if npc.go_and_interact(player, current.start_npc, current.start) then
-            npc.accept(current.id)
+        if npc.at_npc(player, current.start_npc, current.start) then
+            npc.accept(player, current.id, current.name, current.start_npc)
         end
         return
     end
-    if npc.is_complete(current.id) then
+    if npc.is_complete(current.id, current.name) then
         leave_hunt()
         state.set_note("Quest", "Turn in " .. (current.name or tostring(current.id)))
-        if npc.go_and_interact(player, current.end_npc, current.finish) then
-            npc.turn_in(current.id)
+        if npc.at_npc(player, current.end_npc, current.finish) then
+            npc.turn_in(player, current.id, current.name, current.end_npc)
         end
         return
     end
@@ -487,7 +487,7 @@ function quest.tick(player)
     end
     leave_hunt()
     state.set_note("Quest", "Travel " .. (current.name or tostring(current.id)))
-    npc.go_and_interact(player, current.end_npc, current.finish)
+    npc.at_npc(player, current.end_npc, current.finish)
 end
 
 return quest

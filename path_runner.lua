@@ -1,15 +1,15 @@
 -- ============================================================================
 -- Master Farmer - Grindbot
--- PathTool playback — recorded follow_path chunks use simple_movement:navigate.
--- Long OOC legs use movement.move_to (Simple Movement). Combat pauses the path
--- and Movement Handler owns facing/cast pauses until combat fully ends.
+-- PathTool playback — recorded follow_path chunks stay on simple_movement.
+-- Long OOC legs (approach to start, blocked hops) go through movement.nav_to
+-- which may use Sentinel. Leash is disarmed while Sentinel owns a move.
 -- Off-path: stay inside a 10-yard corridor; traceline + vec2/vec3 hops rejoin the polyline.
 -- Reverse: waypoint order is flipped at start; skip/loop still walk +1 through that list.
 -- Movement issues are throttled in movement.lua (max 1 per MOVE_GAP).
 -- ============================================================================
 -- Authors: BLIZZ - Anthonyk
--- Version: 1.3.39
--- Folder: Master_Farmer_Grindbot_v1.3.39
+-- Version: 2.2.0
+-- Folder: Master_Farmer_Grindbot_v2.2.0
 -- ============================================================================
 
 ---@type izi_api
@@ -160,7 +160,7 @@ function path_runner.pause(keep_nav)
         return
     end
     pcall(function()
-        movement.stop()
+        movement.nav_stop()
     end)
 end
 
@@ -207,7 +207,7 @@ function path_runner.stop()
         movement.clear_path_leash()
     end
     pcall(function()
-        movement.stop()
+        movement.nav_stop()
     end)
 end
 
@@ -234,6 +234,8 @@ function path_runner.start(path, opts)
         path = normalized,
         index = 1,
         loop = loop,
+        laps = 0,
+        lap_pending = 0,
         wait_until = 0,
         wait_armed = false,
         action_i = 1,
@@ -269,7 +271,7 @@ function path_runner.start(path, opts)
         local current = safe(function() return core.get_map_id() end)
         if type(current) == "number" and current ~= 0 and current ~= map_id then
             session.map_warned = true
-            core.log("[Master Farmer - Grindbot] Path map_id " .. tostring(map_id) .. " (current " .. tostring(current) .. ") — running world coords anyway.")
+            core.log("[Master Farmer - Grindbot] Path map_id " .. tostring(map_id) .. " (current " .. tostring(current) .. ") - running world coords anyway.")
         end
     end
     core.log(string.format(
@@ -319,7 +321,7 @@ local function run_action(player, act)
             return true
         end
         pcall(function()
-            movement.stop()
+            movement.nav_stop()
         end)
         local ok = safe(function()
             return spell:cast_safe(player, "path:" .. tostring(id))
@@ -393,17 +395,17 @@ local function issue_move(waypoints, from_index)
     session.nav_until = to
     if to > from_index then
         if session.slice and session.slice_from == from_index and session.slice_to == to then
-            return movement.follow_path(session.slice)
+            return movement.nav_path(session.slice)
         end
         local pts = {}
         for i = from_index, to do
             pts[#pts + 1] = waypoints[i]
         end
         session.slice, session.slice_from, session.slice_to = pts, from_index, to
-        return movement.follow_path(pts)
+        return movement.nav_path(pts)
     end
     session.slice, session.slice_from, session.slice_to = nil, nil, nil
-    return movement.move_to(wp)
+    return movement.nav_to(wp)
 end
 
 local function skip_offmesh(n)
@@ -417,7 +419,7 @@ local function skip_offmesh(n)
     session.index = jump + 1
     reset_hold(session)
     pcall(function()
-        movement.stop()
+        movement.nav_stop()
     end)
     movement.clear_fail()
 end
@@ -436,7 +438,7 @@ function path_runner.tick(player)
     if session.paused then
         return true
     end
-    if movement.patrol_blocked and movement.patrol_blocked() then
+    if movement.in_combat_movement() then
         return true
     end
 
@@ -467,7 +469,7 @@ function path_runner.tick(player)
         end
         if movement.is_moving() then
             pcall(function()
-                movement.stop()
+                movement.nav_stop()
             end)
             state.set_note("Path", "Rejoin path")
             return true
@@ -510,11 +512,11 @@ function path_runner.tick(player)
                     session.index = skip_blocked(waypoints, 1)
                     reset_hold(session)
                     movement.clear_fail()
-                    core.log_warning("[Master Farmer - Grindbot] Path start not on navmesh — skipping to waypoint " .. tostring(session.index))
+                    core.log_warning("[Master Farmer - Grindbot] Path start not on navmesh - skipping to waypoint " .. tostring(session.index))
                     return true
                 end
                 state.set_note("Path", "Travel to start  " .. tostring(path.name))
-                movement.move_to(first)
+                movement.nav_to(first)
                 return true
             end
         end
@@ -527,6 +529,8 @@ function path_runner.tick(player)
         if session.loop then
             session.index = 1
             reset_hold(session)
+            session.laps = (session.laps or 0) + 1
+            session.lap_pending = (session.lap_pending or 0) + 1
             core.log("[Master Farmer - Grindbot] Path loop restart: " .. tostring(path.name))
         else
             state.set_note("Path", "Complete")
@@ -549,9 +553,9 @@ function path_runner.tick(player)
         if movement.last_fail_offmesh() then
             if not session.prefer_direct then
                 session.prefer_direct = true
-                core.log("[Master Farmer - Grindbot] Path navmesh miss — walking recorded points directly.")
+                core.log("[Master Farmer - Grindbot] Path navmesh miss - walking recorded points directly.")
                 pcall(function()
-                    movement.stop()
+                    movement.nav_stop()
                 end)
                 movement.clear_fail()
                 issue_move(waypoints, session.index)
@@ -609,6 +613,8 @@ function path_runner.tick(player)
     if session.index > n then
         if session.loop then
             session.index = 1
+            session.laps = (session.laps or 0) + 1
+            session.lap_pending = (session.lap_pending or 0) + 1
             core.log("[Master Farmer - Grindbot] Path loop restart: " .. tostring(path.name))
             return true
         end
@@ -620,6 +626,24 @@ function path_runner.tick(player)
 
     issue_move(waypoints, session.index)
     state.set_note("Path", string.format("%s  %d/%d", path.name, session.index, n))
+    return true
+end
+
+--- Laps completed since the path started.
+function path_runner.laps()
+    return (session and session.laps) or 0
+end
+
+--- True once per completed lap, and only once: the caller consumes the lap.
+---
+--- A flag rather than a comparison against a remembered count, because the
+--- consumer (the vendor trip) runs for many ticks after the lap ends and must
+--- not re-trigger itself when it finishes.
+function path_runner.take_lap()
+    if not session or (session.lap_pending or 0) <= 0 then
+        return false
+    end
+    session.lap_pending = session.lap_pending - 1
     return true
 end
 

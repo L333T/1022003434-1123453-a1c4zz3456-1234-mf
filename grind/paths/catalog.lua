@@ -2,6 +2,7 @@
 return {
     {
         id = "Humanlvl1_4",
+        faction = "alliance",
         label = "Human 1-4",
         module = "grind/paths/Humanlvl1_4",
         region = "ek",
@@ -16,6 +17,7 @@ return {
     },
     {
         id = "LVL1_75Herbing",
+        faction = "alliance",
         label = "Elwynn Herb 1-75",
         module = "grind/paths/LVL1_75Herbing",
         region = "ek",
@@ -30,6 +32,7 @@ return {
     },
     {
         id = "Northshirelvl4_6",
+        faction = "alliance",
         label = "Northshire 4-6",
         module = "grind/paths/Northshirelvl4_6",
         region = "ek",
@@ -44,6 +47,7 @@ return {
     },
     {
         id = "ElwynnForstLVL6_9",
+        faction = "alliance",
         label = "Elwynn Forest 6-9",
         module = "grind/paths/ElwynnForstLVL6_9",
         region = "ek",
@@ -58,6 +62,7 @@ return {
     },
     {
         id = "NorthsireVendor_to_GoldshireVendor",
+        faction = "alliance",
         label = "Northshire Vendor -> Goldshire Vendor",
         module = "grind/paths/NorthsireVendor_to_GoldshireVendor",
         region = "ek",
@@ -72,6 +77,7 @@ return {
     },
     {
         id = "ElwynnLVL9_12",
+        faction = "alliance",
         label = "Elwynn Forest 9-12",
         module = "grind/paths/ElwynnLVL9_12",
         region = "ek",
@@ -86,6 +92,7 @@ return {
     },
     {
         id = "WestFallLVL12_14",
+        faction = "alliance",
         label = "Westfall 12-14",
         module = "grind/paths/WestFallLVL12_14",
         region = "ek",
@@ -100,6 +107,7 @@ return {
     },
     {
         id = "Westfall12_14VendorRoute",
+        faction = "alliance",
         label = "Westfall 12-14 Vendor Route",
         module = "grind/paths/Westfall12_14VendorRoute",
         region = "ek",

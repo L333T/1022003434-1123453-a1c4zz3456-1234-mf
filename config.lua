@@ -1,63 +1,26 @@
 -- ============================================================================
 -- Master Farmer - Grindbot
--- Config accessors + KEY_MAP from Easy_Data Chinese keys (grind-core only)
+-- Config accessors — thin pass-through to the GUI
 -- ============================================================================
 -- Authors: BLIZZ - Anthonyk
--- Version: 1.3.37
--- Folder: Master_Farmer_Grindbot_v1.3.37
+-- Version: 2.2.0
+-- Folder: Master_Farmer_Grindbot_v2.2.0
+-- ============================================================================
+-- This file previously also carried `config.KEY_MAP`, a table of the original
+-- bot's Chinese `Easy_Data` setting names mapped onto this project's GUI keys.
+-- It was string data, not logic: nothing in this codebase ever read it, no
+-- module requires config.lua, and `Easy_Data` appears nowhere here.
+--
+-- The mapping is preserved, with an English gloss for every key, in
+-- docs/SOURCE_TRANSLATION.md section 5. It is kept there rather than here
+-- because the Chinese side is the *lookup key* - it cannot be translated in
+-- place without destroying the only thing the table is for. If legacy Chinese
+-- config files ever need importing, rebuild the table from that document.
 -- ============================================================================
 
 local gui = require("gui")
 
 local config = {}
-
-config.KEY_MAP = {
-    ["传送检测"] = "mfg_teleport",
-    ["传送距离"] = "mfg_teleport_yards",
-    ["需要吃喝"] = "mfg_eat_drink",
-    ["回血百分比"] = "mfg_eat_hp",
-    ["回蓝百分比"] = "mfg_drink_mana",
-    ["使用药水"] = "mfg_potions",
-    ["回血药水百分比"] = "mfg_hp_pot",
-    ["回蓝药水百分比"] = "mfg_mp_pot",
-    ["随机路径"] = "mfg_random_path",
-    ["最大击杀时间"] = "mfg_max_kill",
-    ["巡逻反击"] = "mfg_fight_back",
-    ["反击百分比"] = "mfg_fight_back_hp",
-    ["采集反击范围"] = "mfg_fight_back_yards",
-    ["玩家检测"] = "mfg_player_detect",
-    ["玩家检测距离"] = "mfg_player_yards",
-    ["只击杀无目标怪物"] = "mfg_untapped",
-    ["需要拾取"] = "mfg_loot",
-    ["只拾取我击杀"] = "mfg_loot_mine",
-    ["需要卖物"] = "mfg_vendor_sell",
-    ["需要修理"] = "mfg_repair",
-    ["灰色"] = "mfg_sell_grey",
-    ["白色"] = "mfg_sell_white",
-    ["绿色"] = "mfg_sell_green",
-    ["卖物格数"] = "mfg_bag_free",
-    ["修理耐久度"] = "mfg_repair_pct",
-    ["保留物品"] = "mfg_keep_items",
-    ["食物保留数量"] = "mfg_food_count",
-    ["饮料保留数量"] = "mfg_drink_count",
-    ["法师Ice Barrier"] = "mfg_ice_barrier",
-    ["法师Mana Sheild"] = "mfg_mana_shield",
-    ["法师Ice Armor"] = "mfg_ice_armor",
-    ["Mage Armor"] = "mfg_mage_armor",
-    ["法师Molten Armor"] = "mfg_molten_armor",
-    ["法师烈焰风暴"] = "mfg_flamestrike",
-    ["法师暴风雪"] = "mfg_blizzard",
-    ["法师召唤水元素"] = "mfg_water_ele",
-    ["法师冰枪术"] = "mfg_ice_lance",
-    ["法师冰锥术"] = "mfg_cone",
-    ["法师炎爆术"] = "mfg_pyroblast",
-    ["法师龙息术"] = "mfg_dragons_breath",
-    ["法师冲击波"] = "mfg_blast_wave",
-    ["法师寒冰箭"] = "mfg_frostbolt",
-    ["法师灼烧"] = "mfg_scorch",
-    ["法师奥术飞弹"] = "mfg_arcane_missiles",
-    ["法师火球术"] = "mfg_fireball",
-}
 
 function config.is_on(key)
     return gui.is_on(key)

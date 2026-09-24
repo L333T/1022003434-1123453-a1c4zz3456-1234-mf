@@ -3,8 +3,8 @@
 -- Death run — release, path graveyard to corpse, retrieve
 -- ============================================================================
 -- Authors: BLIZZ - Anthonyk
--- Version: 1.3.37
--- Folder: Master_Farmer_Grindbot_v1.3.37
+-- Version: 2.2.0
+-- Folder: Master_Farmer_Grindbot_v2.2.0
 -- ============================================================================
 
 ---@type izi_api
@@ -26,6 +26,7 @@ local RELEASE_GAP = 3.0
 local RETRIEVE_RANGE = 32.0
 local HOSTILE_RANGE = 8.0
 local SAFE_OFFSET = 10.0
+local LEVEL_GAP = 6          -- mobs this far below the player are not a threat
 local RETRIEVE_GAP = 1.5
 
 local function safe(fn)
@@ -87,7 +88,13 @@ local function dist_to(pos)
     return math.sqrt(dx * dx + dy * dy + dz * dz)
 end
 
-local function hostiles_near(pos, yards)
+--- Is anything near `pos` that would actually threaten a resurrection?
+---
+--- `player_level` is optional. When supplied, mobs more than LEVEL_GAP levels
+--- below the player are ignored: a grey mob next to the corpse is not a threat,
+--- and treating it as one forces a pointless relocation every single death in
+--- a low-level zone.
+local function hostiles_near(pos, yards, player_level)
     if not pos then
         return false
     end
@@ -103,7 +110,16 @@ local function hostiles_near(pos, yards)
             if safe(function() return u:is_dead_or_ghost() end) ~= true then
                 if safe(function() return u:is_player() end) ~= true then
                     if safe(function() return u:is_dummy() end) ~= true then
-                        return true
+                        local ignore = false
+                        if type(player_level) == "number" then
+                            local lvl = safe(function() return u:get_level() end)
+                            if type(lvl) == "number" and (player_level - lvl) > LEVEL_GAP then
+                                ignore = true
+                            end
+                        end
+                        if not ignore then
+                            return true
+                        end
                     end
                 end
             end
@@ -112,11 +128,24 @@ local function hostiles_near(pos, yards)
     return false
 end
 
-local function safe_retrieve_pos(corpse)
+--- Snap a candidate onto the ground. Offsetting x/y while keeping the corpse's
+--- z puts the point inside terrain on any slope, which then fails to path to.
+local function snapped(x, y, hint_z)
+    local z = hint_z
+    if type(movement.ground_z) == "function" then
+        local got = safe(function() return movement.ground_z(x, y, hint_z) end)
+        if type(got) == "number" and got == got then
+            z = got
+        end
+    end
+    return vec3.new(x, y, z)
+end
+
+local function safe_retrieve_pos(corpse, player_level)
     if not corpse then
         return nil
     end
-    if not hostiles_near(corpse, HOSTILE_RANGE) then
+    if not hostiles_near(corpse, HOSTILE_RANGE, player_level) then
         return corpse
     end
     local offsets = {
@@ -126,8 +155,8 @@ local function safe_retrieve_pos(corpse)
         { SAFE_OFFSET, -SAFE_OFFSET },
     }
     for i = 1, #offsets do
-        local candidate = vec3.new(corpse.x + offsets[i][1], corpse.y + offsets[i][2], corpse.z)
-        if not hostiles_near(candidate, HOSTILE_RANGE) then
+        local candidate = snapped(corpse.x + offsets[i][1], corpse.y + offsets[i][2], corpse.z)
+        if not hostiles_near(candidate, HOSTILE_RANGE, player_level) then
             return candidate
         end
     end
@@ -139,11 +168,11 @@ local function run_to(dest)
         return
     end
     if movement.last_fail_offmesh() then
-        movement.move_direct(dest)
+        movement.nav_to(dest, true)
         movement.clear_fail()
         return
     end
-    movement.move_to(dest)
+    movement.nav_to(dest)
 end
 
 function death.is_down(player)
@@ -162,10 +191,33 @@ function death.is_down(player)
     return false
 end
 
+--- Blacklist whatever we were fighting when we died.
+---
+--- The reference bot does this so the target selector stops handing back the
+--- exact mob that just killed us - otherwise the bot corpse-runs, res-es, walks
+--- straight back into the same pull and dies again in a loop. state already has
+--- the mechanism; movement/combat.lua uses it for unreachable mobs.
+local function blacklist_killer()
+    if type(state.mark_unreachable) ~= "function" then
+        return
+    end
+    local unit = safe(function() return movement.combat_unit() end)
+    if not unit then
+        return
+    end
+    local guid = safe(function() return unit:get_guid() end)
+    if guid == nil then
+        return
+    end
+    state.mark_unreachable(guid)
+    core.log("[Master Farmer - Grindbot] Blacklisted the mob that killed us: " .. tostring(guid))
+end
+
 local function begin_death()
     if state.dead.waiting then
         return
     end
+    blacklist_killer()
     state.dead.waiting = true
     state.dead.corpse = nil
     state.dead.retrieve_at = 0
@@ -175,7 +227,7 @@ local function begin_death()
         movement.set_resting(false)
     end
     pause_path()
-    movement.stop()
+    movement.nav_stop()
 end
 
 local function end_death()
@@ -217,7 +269,8 @@ function death.tick(player)
         return true
     end
 
-    local dest = safe_retrieve_pos(corpse)
+    local my_level = safe(function() return player:get_level() end)
+    local dest = safe_retrieve_pos(corpse, my_level)
     local d = dist_to(dest) or dist_to(corpse)
     if type(d) ~= "number" then
         run_to(dest)
@@ -231,7 +284,7 @@ function death.tick(player)
         return true
     end
 
-    movement.stop()
+    movement.nav_stop()
     local delay = safe(function()
         return core.game_ui.get_resurrect_corpse_delay()
     end) or 0

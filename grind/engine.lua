@@ -3,8 +3,8 @@
 -- Patrol / kill / loot machine
 -- ============================================================================
 -- Authors: BLIZZ - Anthonyk
--- Version: 1.3.37
--- Folder: Master_Farmer_Grindbot_v1.3.37
+-- Version: 2.2.0
+-- Folder: Master_Farmer_Grindbot_v2.2.0
 -- ============================================================================
 
 ---@type izi_api
@@ -80,6 +80,14 @@ function grind.clear_profile()
     hunt = nil
 end
 
+--- Turn a loaded grind path into the zone shape the engine walks.
+---
+--- `mobs` is deliberately allowed to be nil. The zone tables name specific npc
+--- ids because they describe a camp; a PathTool route describes a LOOP through
+--- an area and should engage whatever is on it. targeting.id_wanted treats a
+--- nil or empty list as "any npc", and the level band, tap rules and
+--- reachability checks still apply - so a route with no mob list is not
+--- unfiltered, it is just not restricted to a hand-listed set.
 local function path_to_zone(path)
     if type(path) ~= "table" or type(path.waypoints) ~= "table" or #path.waypoints < 1 then
         return nil
@@ -156,8 +164,8 @@ function grind.kill_mobs(player)
         return
     end
     if healing and type(healing.is_resting) == "function" and healing.is_resting() then
-        if movement and type(movement.stop_if_moving) == "function" then
-            movement.stop_if_moving()
+        if movement and type(movement.nav_stop) == "function" then
+            movement.nav_stop()
         end
         return
     end
@@ -248,7 +256,7 @@ function grind.kill_mobs(player)
         skip_node(movement.last_fail_reason() or "blacklist")
         return
     end
-    if movement.is_quiet() or (movement.patrol_blocked and movement.patrol_blocked()) then
+    if movement.is_quiet() or movement.in_combat_movement() then
         state.set_note("Grind", "Nav settle")
         return
     end
@@ -257,7 +265,7 @@ function grind.kill_mobs(player)
         return
     end
     state.set_note("Grind", string.format("%s  node %d / %d", tostring(zone.name or "Patrol"), state.grind.move, n))
-    movement.move_direct(pos)
+    movement.nav_to(pos, true)
 end
 
 function grind.tick(player)
@@ -265,8 +273,8 @@ function grind.tick(player)
         return
     end
     if healing and type(healing.is_resting) == "function" and healing.is_resting() then
-        if movement and type(movement.stop_if_moving) == "function" then
-            movement.stop_if_moving()
+        if movement and type(movement.nav_stop) == "function" then
+            movement.nav_stop()
         end
         pcall(function()
             core.input.stop_attack()
@@ -302,24 +310,24 @@ function grind.tick(player)
 
     local unit = state.target.unit
     if not unit or safe(function() return unit:is_valid() end) ~= true then
-        movement.stop_if_moving()
-        movement.end_engage()
+        movement.nav_stop()
+        movement.combat_release()
         state.reset_target()
         state.grind.step = 1
         return
     end
     if now > state.grind.black_until and state.target.kind == "kill" then
         state.mark_killed(state.target.guid)
-        movement.stop_if_moving()
-        movement.end_engage()
+        movement.nav_stop()
+        movement.combat_release()
         state.reset_target()
         state.grind.step = 1
         return
     end
     if safe(function() return unit:is_dead_or_ghost() end) == true or safe(function() return unit:is_dead() end) == true then
         state.mark_killed(state.target.guid or safe(function() return unit:get_guid() end))
-        movement.stop_if_moving()
-        movement.end_engage()
+        movement.nav_stop()
+        movement.combat_release()
         state.reset_target()
         state.grind.step = 1
         return
@@ -327,7 +335,7 @@ function grind.tick(player)
 
     local dist = safe(function() return player:distance_to(unit) end) or 99
     if dist > 1000 then
-        movement.end_engage()
+        movement.combat_release()
         state.reset_target()
         state.grind.step = 1
         return
@@ -343,23 +351,23 @@ function grind.tick(player)
         yards = 30
     end
     targeting.start_auto_attack(player, unit)
-    if not movement.chase_unit(player, unit, yards) then
+    if not movement.combat_engage(player, unit, yards) then
         if state.is_unreachable and state.is_unreachable(state.target.guid) then
-            movement.end_engage()
+            movement.combat_release()
             state.reset_target()
             state.grind.step = 1
             state.set_note("Grind", "Skip unreachable")
             return
         end
-        movement.face_combat(unit)
+        movement.face(unit)
         state.set_note("Grind", "Closing")
-        rotation.tick(player, unit, { enemies = targeting.combat_scan(player, yards) })
+        rotation.tick(player, unit, { enemies = targeting.combat_scan(player, yards), no_move = true })
         return
     end
-    movement.face_combat(unit)
+    movement.face(unit)
     local pack = targeting.combat_scan(player, yards)
     state.set_note("Grind", "Killing")
-    rotation.tick(player, unit, { enemies = pack })
+    rotation.tick(player, unit, { enemies = pack, no_move = true })
 end
 
 return grind

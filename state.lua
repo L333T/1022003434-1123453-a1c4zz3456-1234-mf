@@ -3,8 +3,8 @@
 -- Shared runtime state (no leaked globals)
 -- ============================================================================
 -- Authors: BLIZZ - Anthonyk
--- Version: 1.3.37
--- Folder: Master_Farmer_Grindbot_v1.3.37
+-- Version: 2.2.0
+-- Folder: Master_Farmer_Grindbot_v2.2.0
 -- ============================================================================
 
 local state = {
@@ -42,7 +42,7 @@ state.dead = {
 }
 
 state.combat = {
-    kite_until = 0,
+    -- kiting is owned by movement.lua's combat controller, not by the rotation
     nova_at = 0,
     face_at = 0,
     unreachable = {},
@@ -67,13 +67,6 @@ state.vendor = {
     lack_gold = 0,
     wait_npc = 0,
     tries = 0,
-}
-
-state.teleport = {
-    x = 0,
-    y = 0,
-    z = 0,
-    alarm_until = 0,
 }
 
 function state.set_note(head, text)

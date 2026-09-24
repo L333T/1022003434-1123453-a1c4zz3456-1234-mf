@@ -3,8 +3,8 @@
 -- Combat engine — threat scan, target latch, kill-first priority, class hooks
 -- ============================================================================
 -- Authors: BLIZZ - Anthonyk
--- Version: 1.3.39
--- Folder: Master_Farmer_Grindbot_v1.3.39
+-- Version: 1.0c
+-- Folder: MasterFarmer_v1.0c
 -- Shared by every class rotation. Class modules opt in by exposing interrupt,
 -- taunt or aggro_dump; the engine never casts on their behalf.
 -- ============================================================================
@@ -307,7 +307,9 @@ end
 function combat.reset()
     combat.release()
     on_me_count = 0
-    state.combat.kite_until = 0
+    if type(state.combat) == "table" then
+        state.combat.kite_until = 0
+    end
 end
 
 return combat

@@ -3,10 +3,26 @@
 -- Vendor sell + repair (Grind_Information merchants)
 -- ============================================================================
 -- Authors: BLIZZ - Anthonyk
--- Version: 1.3.37
--- Folder: Master_Farmer_Grindbot_v1.3.37
+-- Version: 2.2.0
+-- Folder: Master_Farmer_Grindbot_v2.2.0
 -- Sell via core.input.use_container_item while a merchant is open.
 -- Quality from core.quests.get_item_info. No is_vendor invent.
+--
+-- LAP VENDORING (1.6.1)
+--   The Alliance 1-60 w/Vendoring routes are loops that begin and end at their
+--   merchant, and they carry `vendor_each_lap`. For those, a completed lap is
+--   a trip trigger in its own right, alongside the usual full-bags and broken
+--   -gear ones: the bot is standing at the vendor anyway, so selling there
+--   costs nothing and saves a special trip later.
+--
+--   Those routes give `merchant.ids` - every vendor NPC id the route's README
+--   listed - because several of them pass more than one. Any of them will do,
+--   so the first one actually standing nearby wins.
+--
+--   The merchant x/y/z on those routes is the path's FIRST WAYPOINT, not a
+--   surveyed vendor position. It is only there to give the bot somewhere to
+--   walk back to if a fight dragged it off the route; the npc id is what
+--   identifies the merchant.
 -- ============================================================================
 
 ---@type izi_api
@@ -21,6 +37,7 @@ local vec3 = require("common/geometry/vector_3")
 local consumables = require("data/consumables")
 local gui = require("gui")
 local state = require("state")
+local supplies = require("supplies")
 local targeting = require("targeting")
 local movement = require("movement")
 local rotation = require("rotation")
@@ -80,7 +97,46 @@ local function merchant_pos(info)
     return vec3.new(info.x, info.y, info.z)
 end
 
+--- Every vendor npc id this merchant record offers, best first.
+local function merchant_ids(info)
+    local out = {}
+    if type(info) ~= "table" then
+        return out
+    end
+    if type(info.npc_id) == "number" and info.npc_id > 0 then
+        out[#out + 1] = info.npc_id
+    end
+    if type(info.ids) == "table" then
+        for i = 1, #info.ids do
+            local id = info.ids[i]
+            if type(id) == "number" and id > 0 and id ~= info.npc_id then
+                out[#out + 1] = id
+            end
+        end
+    end
+    return out
+end
+
+--- The merchant belonging to the grind path that is running right now.
+--- Takes precedence over the zone table: a path that names its own vendor
+--- knows better than the zone default which one it walks past.
+local function path_merchant()
+    local ok, runner = pcall(require, "path_runner")
+    if not ok or type(runner) ~= "table" or type(runner.current_path) ~= "function" then
+        return nil
+    end
+    local path = safe(function() return runner.current_path() end)
+    if type(path) ~= "table" or type(path.merchant) ~= "table" then
+        return nil
+    end
+    return path.merchant, path
+end
+
 local function current_merchant(player)
+    local from_path = path_merchant()
+    if from_path then
+        return from_path
+    end
     local okz, grind_zones = pcall(require, "grind/zone_lookup")
     if not okz or type(grind_zones) ~= "table" or type(grind_zones.lookup) ~= "function" then
         return nil
@@ -489,6 +545,10 @@ local function close_vendor()
 end
 
 local function finish_trip(note)
+    -- However this trip ended - sold, repaired, merchant missing, out of gold -
+    -- the lap that asked for it is dealt with. Leaving the flag set would make
+    -- the bot turn round and try again immediately.
+    state.vendor.lap_due = false
     state.vendor.active = false
     state.vendor.repaired = false
     state.vendor.repairs = 0
@@ -498,7 +558,7 @@ local function finish_trip(note)
     state.vendor.done_until = izi.now() + DONE_COOLDOWN
     state.vendor.wait_npc = 0
     state.vendor.tries = 0
-    movement.stop()
+    movement.nav_stop()
     close_vendor()
     if note then
         state.set_note("Vendor", note)
@@ -517,6 +577,29 @@ function vendor.reset()
     state.vendor.lack_gold = 0
     state.vendor.wait_npc = 0
     state.vendor.tries = 0
+    -- A lap queued a trip that is now moot: the bot has been stopped, switched
+    -- to rotation only, or moved to another path. Leaving it set would send it
+    -- to a merchant the new path knows nothing about.
+    state.vendor.lap_due = false
+end
+
+--- Did the running path just finish a lap that should end at the vendor?
+---
+--- The lap is consumed whether or not the trip goes ahead, so a route whose
+--- vendor cannot be reached does not queue a trip for every lap it runs.
+local function lap_wants_vendor()
+    local info, path = path_merchant()
+    if not info or not path or path.vendor_each_lap ~= true then
+        return false
+    end
+    if #merchant_ids(info) == 0 then
+        return false
+    end
+    local ok, runner = pcall(require, "path_runner")
+    if not ok or type(runner) ~= "table" or type(runner.take_lap) ~= "function" then
+        return false
+    end
+    return safe(function() return runner.take_lap() end) == true
 end
 
 function vendor.needs_trip(player)
@@ -525,6 +608,16 @@ function vendor.needs_trip(player)
     end
     if not gui.is_on("sell") and not gui.is_on("repair") and not gui.is_on("buy_food") then
         return false
+    end
+
+    -- A completed lap on a vendoring route is a trigger by itself. Checked
+    -- before the cooldown below, because the lap must be consumed on the tick
+    -- it happens or it is lost.
+    if gui.is_on("vendor_each_lap") and lap_wants_vendor() then
+        state.vendor.lap_due = true
+    end
+    if state.vendor.lap_due == true then
+        return true
     end
     if izi.now() < (state.vendor.done_until or 0) and not state.vendor.active then
         return false
@@ -590,6 +683,7 @@ function vendor.tick(player)
             return false
         end
         state.vendor.active = true
+        supplies.reset()
         state.vendor.repaired = false
         state.vendor.repairs = 0
         state.vendor.buys = 0
@@ -606,7 +700,7 @@ function vendor.tick(player)
     end
 
     if merchant_open() then
-        movement.stop()
+        movement.nav_stop()
         state.vendor.tries = 0
         local now = izi.now()
         if now < (state.vendor.interact_until or 0) then
@@ -622,6 +716,13 @@ function vendor.tick(player)
                 return true
             end
         end
+        -- Restock before repair: repair drains gold, and arriving with no food
+        -- is what forces the next trip. Buying first spends what is left over
+        -- after selling instead of after repairing.
+        if supplies.tick(player) then
+            return true
+        end
+
         if gui.is_on("repair") and not state.vendor.repaired then
             if safe(function() return core.inventory.can_merchant_repair() end) == true then
                 local cost = safe(function() return core.inventory.get_total_repair_cost() end) or 0
@@ -658,17 +759,25 @@ function vendor.tick(player)
     end
 
     if not movement.arrived(dest, ARRIVE) then
-        movement.move_to(dest)
+        -- Claim the tick only if movement took the request; combat still owning
+        -- the player (post-fight settle) must not stall the rest of the cascade.
+        if not movement.nav_to(dest) then
+            return false
+        end
         local who = (info and info.name) or (info and info.npc_id) or "merchant"
         state.set_note("Vendor", "Travel to " .. tostring(who))
         return true
     end
 
-    movement.stop()
+    movement.nav_stop()
     local now = izi.now()
     local unit = nil
-    if info.npc_id and info.npc_id > 0 then
-        unit = targeting.find_npc(player, info.npc_id, FIND_RANGE)
+    local ids = merchant_ids(info)
+    for i = 1, #ids do
+        unit = targeting.find_npc(player, ids[i], FIND_RANGE)
+        if unit then
+            break
+        end
     end
     if not unit then
         unit = targeting.find_named(player, info.name, info.name_cn, FIND_RANGE)
@@ -691,8 +800,7 @@ function vendor.tick(player)
     local d = safe(function() return player:distance_to(unit) end) or 99
     if type(d) == "number" and d > 5 then
         local p = safe(function() return unit:get_position() end) or dest
-        movement.move_to(p)
-        return true
+        return movement.nav_to(p) == true
     end
 
     if now < (state.vendor.interact_until or 0) then

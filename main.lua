@@ -3,10 +3,14 @@
 -- Main — update cascade
 -- ============================================================================
 -- Authors: BLIZZ - Anthonyk
--- Version: 1.3.39
--- Folder: Master_Farmer_Grindbot_v1.3.39
--- Standalone IZI. Simple Movement owns out-of-combat travel; Movement Handler owns combat face/pause. No Sentinel. No FB_Nexus. No NavLib.
--- Tick: teleport -> death -> loot -> heal -> buffs -> vendor -> grind XOR quest (Start gated)
+-- Version: 2.2.0
+-- Folder: Master_Farmer_Grindbot_v2.2.0
+-- Standalone IZI. movement.lua is a single-owner state machine: simple_movement
+-- drives all travel and combat repositioning, Sentinel is the navmesh fallback
+-- for long/blocked out-of-combat legs, movement_handler does facing and cast
+-- pauses only. Nothing else in the plugin issues a movement command.
+-- No FB_Nexus. No NavLib.
+-- Tick: death -> rest -> loot -> buffs -> train -> vendor -> equip -> grind XOR quest (Start gated)
 -- ============================================================================
 
 local PLUGIN_MODULES = {
@@ -28,7 +32,27 @@ local PLUGIN_MODULES = {
     "death",
     "healing",
     "vendor",
+    "supplies",
+    "equip",
+    "trainer",
+    "resting",
+    "racials",
+    "data/racials",
+    "data/factions",
+    "events",
+    "buffs",
+    "data/spell_categories",
     "config",
+    -- The path INDEXES. These were missing, and the effect was invisible and
+    -- very confusing: a reload reused the previous session's grind/catalog
+    -- table, so a newly added route list never appeared in the menu however
+    -- many times the plugin was reloaded. They are index tables of a few
+    -- kilobytes, so dropping them costs nothing.
+    "grind/catalog",
+    "grind/paths/catalog",
+    "grind/paths/ally160/catalog",
+    "path_catalog",
+    "data/paths/catalog",
 }
 
 for i = 1, #PLUGIN_MODULES do
@@ -76,7 +100,7 @@ end
 
 local gui = load_mod("gui")
 if not gui then
-    core.log_error("[Master Farmer - Grindbot] GUI module failed — window will not appear.")
+    core.log_error("[Master Farmer - Grindbot] GUI module failed - window will not appear.")
 else
     core.register_on_render_window_callback(function()
         if is_stale() then
@@ -102,10 +126,38 @@ local death = load_mod("death")
 local healing = load_mod("healing")
 local vendor = load_mod("vendor")
 local combat = load_mod("combat")
+local equip = load_mod("equip")
+local trainer = load_mod("trainer")
+
+-- Game events. Registered once per SESSION, not once per load: the callback
+-- cap is per plugin and this file re-runs on every hot reload. events.install
+-- keeps the guard on the shared namespace and refreshes the handler table, so
+-- a reload picks up new handler code without registering a second callback.
+local buffs = load_mod("buffs")
+local events = load_mod("events")
+if events and type(events.install) == "function" then
+    pcall(events.install)
+end
+local supplies = load_mod("supplies")
 local loader = load_mod("loader")
 local path_runner = load_mod("path_runner")
 local modes = load_mod("modes")
 
+if gui and supplies and type(supplies.register_gui) == "function" then
+    pcall(supplies.register_gui, gui.get_menu())
+end
+
+if gui and trainer and type(trainer.register_gui) == "function" then
+    pcall(trainer.register_gui, gui.get_menu())
+end
+if gui and equip and type(equip.register_gui) == "function" then
+    pcall(equip.register_gui, gui.get_menu())
+end
+
+local racials = load_mod("racials")
+if gui and racials and type(racials.register_gui) == "function" then
+    pcall(racials.register_gui, gui.get_menu())
+end
 if gui and rotation and type(rotation.register_gui) == "function" then
     pcall(function()
         rotation.register_gui(gui.get_menu())
@@ -113,6 +165,7 @@ if gui and rotation and type(rotation.register_gui) == "function" then
 end
 
 local nav_halted = false
+local move_debug_on = false
 
 local function halt_bot_movement()
     if nav_halted then
@@ -123,10 +176,7 @@ local function halt_bot_movement()
         path_runner.stop()
     end
     if movement then
-        movement.stop()
-        if type(movement.release) == "function" then
-            movement.release()
-        end
+        movement.halt()
     end
 end
 
@@ -140,25 +190,6 @@ local function pause_path_for_combat()
     end
 end
 
-local function path_scan_range()
-    local yards = 50
-    if gui and type(gui.slider) == "function" then
-        yards = gui.slider("path_combat_yards", 50)
-    end
-    local current = path_runner.current_path and path_runner.current_path() or nil
-    local pull = current and tonumber(current.pull)
-    if type(pull) == "number" and pull > yards then
-        yards = pull
-    end
-    if type(yards) ~= "number" or yards < 10 then
-        yards = 50
-    end
-    if yards > 80 then
-        yards = 80
-    end
-    return yards
-end
-
 local function rotation_yards(player)
     local yards = 30
     if rotation and type(rotation.combat_range) == "function" then
@@ -166,6 +197,33 @@ local function rotation_yards(player)
     end
     if type(yards) ~= "number" or yards < 5 then
         yards = 30
+    end
+    return yards
+end
+
+--- How far out to look for something to fight.
+---
+--- The class decides: melee scans tighter than a caster, because melee has to
+--- close the distance and then stand still, and every extra mob inside the
+--- scan is one more thing arriving during that. The path may ask for a wider
+--- scan through its `pull` value, and that still wins - a route author who
+--- says "pull from 50 yards here" knows the terrain better than the class
+--- default does.
+local function scan_yards(player)
+    local yards = 30
+    if rotation and type(rotation.scan_range) == "function" then
+        local ok, n = pcall(rotation.scan_range, player)
+        if ok and type(n) == "number" and n >= 5 then
+            yards = n
+        end
+    end
+    local current = path_runner.current_path and path_runner.current_path() or nil
+    local pull = current and tonumber(current.pull)
+    if type(pull) == "number" and pull > yards then
+        yards = pull
+    end
+    if yards > 80 then
+        yards = 80
     end
     return yards
 end
@@ -222,10 +280,14 @@ local function closest_in_range(player, lists, yards)
 end
 
 local function path_fight(player, unit, scan_range)
-    if movement.needs_rejoin and movement.needs_rejoin() == true then
+    if movement.needs_rejoin() == true then
+        -- Getting back on the recorded line outranks fighting from off it, so
+        -- hand movement back to navigation before asking for the rejoin hop -
+        -- otherwise combat ownership would refuse it until the fight ended.
+        movement.combat_release()
         if movement.is_moving() then
-            movement.stop()
-        elseif type(movement.rejoin_path) == "function" then
+            movement.nav_stop()
+        else
             movement.rejoin_path()
         end
         targeting.set_current(unit, "kill")
@@ -239,7 +301,14 @@ local function path_fight(player, unit, scan_range)
         core.input.set_target(unit)
     end)
     targeting.start_auto_attack(player, unit)
-    movement.face_combat(unit)
+
+    -- Combat movement owns the player from here: it faces the target, holds the
+    -- rotation's range band and kites when the class profile asks for it. The
+    -- path leash keeps every combat hop within PATH_LEASH of the recorded line,
+    -- so the bot fights from the path instead of wandering off it.
+    local yards = rotation_yards(player)
+    movement.combat_engage(player, unit, yards)
+
     local pack = targeting.combat_scan(player, scan_range)
     state.set_note("Path", "Combat")
     rotation.tick(player, unit, { enemies = pack, no_move = true })
@@ -253,7 +322,7 @@ local function path_handle_combat(player)
     if healing and type(healing.is_resting) == "function" and healing.is_resting() then
         pause_path_for_combat()
         if movement and type(movement.is_moving) == "function" and movement.is_moving() then
-            movement.stop()
+            movement.nav_stop()
         end
         pcall(function()
             core.input.stop_attack()
@@ -269,7 +338,10 @@ local function path_handle_combat(player)
         return false
     end
 
-    local range = path_scan_range()
+    -- The class sets the scan; combat_range is a floor, because a scan
+    -- narrower than the range the rotation actually fights at would mean
+    -- walking past things it could already hit.
+    local range = scan_yards(player)
     local yards = rotation_yards(player)
     if range < yards then
         range = yards
@@ -292,9 +364,9 @@ local function path_handle_combat(player)
     if unit then
         if safe(function() return unit:is_dead_or_ghost() end) == true or safe(function() return unit:is_dead() end) == true then
             state.mark_killed(state.target.guid or safe(function() return unit:get_guid() end))
-            movement.stop_if_moving()
-            if type(movement.end_engage) == "function" then
-                movement.end_engage()
+            movement.nav_stop()
+            if type(movement.combat_release) == "function" then
+                movement.combat_release()
             end
             state.reset_target()
             unit = nil
@@ -316,11 +388,11 @@ local function path_handle_combat(player)
         local in_combat = safe(function() return player:is_in_combat() end) == true
         if in_combat ~= true then
             if path_runner.is_paused() then
-                if not (movement.patrol_blocked and movement.patrol_blocked()) then
-                    if type(movement.end_engage) == "function" then
-                        movement.end_engage()
+                if not movement.in_combat_movement() then
+                    if type(movement.combat_release) == "function" then
+                        movement.combat_release()
                     end
-                    if not movement.patrol_ready or movement.patrol_ready() then
+                    if movement.can_navigate() then
                         path_runner.resume()
                     end
                 end
@@ -336,18 +408,18 @@ local function path_handle_combat(player)
     if target then
         state.grind.black_until = now + gui.slider("max_kill", 60)
         if movement.sentinel_active and movement.sentinel_active() then
-            movement.stop()
+            movement.nav_stop()
         end
         return path_fight(player, target, range)
     end
 
     if path_runner.is_paused() then
-        if movement.patrol_ready and movement.patrol_ready() then
-            if type(movement.end_engage) == "function" then
-                movement.end_engage()
+        if movement.can_navigate() then
+            if type(movement.combat_release) == "function" then
+                movement.combat_release()
             end
             path_runner.resume()
-        elseif not (movement.patrol_blocked and movement.patrol_blocked()) then
+        elseif not movement.in_combat_movement() then
             path_runner.resume()
         end
     end
@@ -360,11 +432,11 @@ local function tick_rotation_only(player)
     end
     local target = safe(function() return player:get_target() end)
     if not target or safe(function() return target:is_valid() end) ~= true then
-        state.set_note("Rotation", "Rotation Only — select a target")
+        state.set_note("Rotation", "Rotation Only - select a target")
         return
     end
     if safe(function() return target:is_dead_or_ghost() end) == true or safe(function() return target:is_dead() end) == true then
-        state.set_note("Rotation", "Rotation Only — target dead")
+        state.set_note("Rotation", "Rotation Only - target dead")
         return
     end
     pcall(function()
@@ -372,7 +444,7 @@ local function tick_rotation_only(player)
     end)
     local pack = {}
     if targeting then
-        pack = targeting.combat_scan(player, gui.slider("path_combat_yards", 30))
+        pack = targeting.combat_scan(player, scan_yards(player))
     end
     state.set_note("Rotation", "Rotation Only")
     rotation.tick(player, target, { enemies = pack, no_move = true })
@@ -397,45 +469,6 @@ local function player_is_busy(player)
     return false
 end
 
-local function teleport_halt(player, pos)
-    if not gui or not state or not movement or not death then
-        return false
-    end
-    if not gui.is_on("teleport") or not pos then
-        state.teleport.x = pos and pos.x or 0
-        state.teleport.y = pos and pos.y or 0
-        state.teleport.z = pos and pos.z or 0
-        return false
-    end
-    if state.teleport.x == 0 and state.teleport.y == 0 and state.teleport.z == 0 then
-        state.teleport.x = pos.x
-        state.teleport.y = pos.y
-        state.teleport.z = pos.z
-        return false
-    end
-    local dx = pos.x - state.teleport.x
-    local dy = pos.y - state.teleport.y
-    local dz = pos.z - state.teleport.z
-    local d = math.sqrt(dx * dx + dy * dy + dz * dz)
-    local limit = gui.slider("teleport_yards", 80)
-    if d > limit and not death.is_down(player) then
-        if state.teleport.alarm_until == 0 then
-            state.teleport.alarm_until = izi.now() + 90
-            core.log_warning("[Master Farmer - Grindbot] Teleport detected — pausing 90s")
-        end
-        if izi.now() < state.teleport.alarm_until then
-            movement.stop()
-            state.set_note("Teleport", "Paused after large move")
-            return true
-        end
-        state.teleport.alarm_until = 0
-    end
-    state.teleport.x = pos.x
-    state.teleport.y = pos.y
-    state.teleport.z = pos.z
-    return false
-end
-
 local function on_update()
     if is_stale() then
         return
@@ -447,10 +480,15 @@ local function on_update()
         return
     end
     gui.process_keybinds()
-    if movement and type(movement.pulse) == "function" then
-        pcall(function()
-            movement.pulse()
-        end)
+    if movement then
+        local want_debug = gui.is_on("move_debug") == true
+        if want_debug ~= move_debug_on then
+            move_debug_on = want_debug
+            movement.set_debug(want_debug)
+        end
+        -- The movement state machine ticks before anything else reads its state,
+        -- so every consumer this frame sees one consistent owner and state.
+        pcall(movement.pulse)
     end
 
     local player = safe(function() return izi.me() end)
@@ -497,17 +535,24 @@ local function on_update()
         return
     end
 
-    local pos = state.cached_pos
-    if teleport_halt(player, pos) then
+    if death.tick(player) then
         return
     end
-    if death.tick(player) then
+    -- Rest outranks looting. Looting used to come first, and because
+    -- loot.tick returns true on every tick while a lootable corpse is in
+    -- range, healing.tick was never reached - the bot would sit at 30% mana
+    -- working through corpses and never drink. Resting also hard-locks
+    -- movement, so loot.tick below cannot walk off mid-drink.
+    if healing.tick(player) then
         return
     end
     if loot and loot.tick(player) then
         return
     end
-    if healing.tick(player) then
+    -- Self-buff upkeep. Sits with the class buffs because it answers the
+    -- same question, and after healing.tick so a rest is never interrupted
+    -- to refresh something.
+    if buffs and type(buffs.tick) == "function" and buffs.tick(player) then
         return
     end
     if rotation.buffs_ooc(player) then
@@ -518,7 +563,20 @@ local function on_update()
         return
     end
 
+    -- Ahead of the vendor trip on purpose: both want the gossip frame, and
+    -- selecting the trainer option replaces whatever is open. Training is the
+    -- rarer opportunity, and vendor.tick re-opens the merchant by itself.
+    if trainer and type(trainer.tick) == "function" and trainer.tick(player) then
+        return
+    end
     if vendor and vendor.tick(player) then
+        return
+    end
+
+    -- After vendor on purpose: equipping and selling are the same underlying
+    -- call (use_container_item), so this must be unreachable while a merchant
+    -- window is open or an upgrade gets sold instead of worn.
+    if equip and type(equip.tick) == "function" and equip.tick(player) then
         return
     end
 
@@ -553,10 +611,8 @@ local function on_update()
 end
 
 local function on_render()
-    if movement and type(movement.on_render) == "function" then
-        pcall(function()
-            movement.on_render()
-        end)
+    if movement then
+        pcall(movement.on_render)
     end
     if is_stale() then
         return

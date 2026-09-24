@@ -5,8 +5,8 @@
 -- Uses only verified core.menu.window / core.menu.* / assets_helper APIs.
 -- Consuming projects supply name, logo, tabs, controls, and theme overrides.
 -- Authors: BLIZZ - Anthonyk
--- Version: 1.3.39
--- Folder: Master_Farmer_Grindbot_v1.3.39
+-- Version: 2.2.0
+-- Folder: Master_Farmer_Grindbot_v2.2.0
 -- ============================================================================
 
 ---@type color
@@ -652,6 +652,7 @@ local function store_element(self, kind, id, element, opts)
         on_click = opts.on_click,
         column = opts.column or 1,
         class_id = opts.class_id,
+        race_id = opts.race_id,
         spell = opts.spell,
         skip_draw = opts.skip_draw == true,
     }
@@ -761,6 +762,19 @@ function Menu:set_player_class(class_id)
     end
 end
 
+--- Racials are per race, so a racial control carries race_id the same way a
+--- class spell carries class_id. Without this every race's racials would show
+--- on every character.
+function Menu:set_player_race(race_id)
+    if type(race_id) == "number" then
+        self._player_race_id = race_id
+    end
+end
+
+function Menu:player_race()
+    return self._player_race_id
+end
+
 function Menu:player_class()
     return self._player_class_id
 end
@@ -774,6 +788,11 @@ function Menu:control_visible(record)
     end
     if type(record.class_id) == "number" then
         if self._player_class_id ~= record.class_id then
+            return false
+        end
+    end
+    if type(record.race_id) == "number" then
+        if self._player_race_id ~= record.race_id then
             return false
         end
     end
@@ -1199,6 +1218,18 @@ function Menu:draw_header(win, m)
     local pad = t.left_margin
     local bottom_pad = 10
 
+    -- Version, top-left. Drawn before anything else in the header so nothing
+    -- can overlap it, and independent of header_text: when that is set - which
+    -- it always is - the subtitle branch below never runs, which is why the
+    -- build number used to be nowhere on screen.
+    local version_h = 0
+    if self.version ~= nil and tostring(self.version) ~= "" then
+        local vtext = "v" .. tostring(self.version)
+        local vsz = size_of_font(win, t.font_small, t.small_font_size, vtext)
+        draw_text(win, t.font_small, vec2.new(pad, 6), t.text_secondary, vtext, t.small_font_size)
+        version_h = vsz.y + 4
+    end
+
     local title = self.header_text
     local sub = ""
     if type(title) ~= "string" or title == "" then
@@ -1207,7 +1238,7 @@ function Menu:draw_header(win, m)
         if sub == "" and self.version ~= "" then
             sub = "v" .. tostring(self.version)
         elseif sub ~= "" and self.version ~= "" then
-            sub = sub .. "  ·  v" .. tostring(self.version)
+            sub = sub .. "  -  v" .. tostring(self.version)
         end
     end
 
@@ -1222,6 +1253,10 @@ function Menu:draw_header(win, m)
     if sub ~= "" then
         text_h = text_h + 4 + sub_sz.y
     end
+    -- Reserve the version line so the title block centres in what is LEFT of
+    -- the header rather than in the whole of it, which is what produced the
+    -- uneven gap above the title.
+    text_h = text_h + version_h
 
     local logo = type(self.logo) == "string" and self.logo ~= ""
     local dw, dh = 0, 0
@@ -1903,7 +1938,11 @@ function Menu:draw_tab_scroll_area(win, tab_id, x, y, w, h)
     local inner_w = view_w - 12
     local extra_top = 0
     if tab_id == "class" and self.tab_draw[tab_id] then
-        extra_top = 72
+        -- 72 was exactly the two status lines. The Spells tab now also carries
+        -- the button that opens the full spellbook, which ends at ~74px, so
+        -- the reserve has to cover it or the button is clipped and the first
+        -- toggle draws on top of it.
+        extra_top = 104
         pcall(self.tab_draw[tab_id], win, start_x, start_y, inner_w, extra_top, self)
     end
     if tab_id == "path" and self.tab_draw[tab_id] then
@@ -1992,15 +2031,31 @@ function Menu:draw_popup_window(popup)
                 local w = (size and size.x) or popup.width
                 local h = (size and size.y) or popup.height
                 local header_h = 44
-                draw_rect(win, vec2.new(0, 0), vec2.new(w, header_h), t.bg_header, t.border_header, 0.0, t.border_thickness)
+
+                -- Stop short of the close cross. The core draws the cross in
+                -- the top-right BEFORE this callback runs, so a header bar
+                -- spanning the full width painted straight over it and the
+                -- popup looked as though it had no way to close.
+                local cross_w = 34
+                local bounds = safe(function()
+                    return win:get_close_cross_bounds()
+                end)
+                if type(bounds) == "table" and bounds.min and bounds.max then
+                    local want = w - bounds.min.x + 6
+                    if type(want) == "number" and want > cross_w then
+                        cross_w = want
+                    end
+                end
+                draw_rect(win, vec2.new(0, 0), vec2.new(w - cross_w, header_h),
+                    t.bg_header, t.border_header, 0.0, t.border_thickness)
 
                 local title = popup.title or ""
-                local title_x = safe(function()
-                    return win:get_text_centered_x_pos(title)
-                end)
-                if type(title_x) ~= "number" then
-                    local sz = size_of_font(win, t.font_section, t.section_font_size, title)
-                    title_x = math.floor((w - sz.x) * 0.5)
+                local sz = size_of_font(win, t.font_section, t.section_font_size, title)
+                -- Centred in the space the header actually occupies, so a long
+                -- title cannot drift under the close cross.
+                local title_x = math.floor(((w - cross_w) - sz.x) * 0.5)
+                if title_x < t.left_margin then
+                    title_x = t.left_margin
                 end
                 draw_text(
                     win,
