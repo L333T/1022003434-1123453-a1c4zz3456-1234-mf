@@ -101,6 +101,7 @@ local rotation = load_mod("rotation")
 local death = load_mod("death")
 local healing = load_mod("healing")
 local vendor = load_mod("vendor")
+local combat = load_mod("combat")
 local loader = load_mod("loader")
 local path_runner = load_mod("path_runner")
 local modes = load_mod("modes")
@@ -485,6 +486,9 @@ local function on_update()
         halt_bot_movement()
         if vendor then
             vendor.reset()
+        end
+        if combat then
+            combat.reset()
         end
         return
     end

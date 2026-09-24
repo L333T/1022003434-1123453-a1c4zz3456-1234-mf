@@ -13,6 +13,7 @@ local enums = require("common/enums")
 
 local mage = require("rotations/mage")
 local targeting = require("targeting")
+local combat = require("combat")
 
 local by_class = {}
 if mage and mage.class_id then
@@ -73,17 +74,32 @@ function rotation.tick(player, target, ctx)
     if not mod or type(mod.tick) ~= "function" then
         return false
     end
-    if player and target and targeting and type(targeting.start_auto_attack) == "function" then
+    ctx = ctx or {}
+    local pack = ctx.enemies
+    if type(pack) ~= "table" then
+        pack = nil
+    end
+    local resolved, scanned = combat.acquire(player, rotation.combat_range(player), target, pack)
+    if not resolved then
+        return false
+    end
+    target = resolved
+    ctx.enemies = scanned
+    if combat.dismount(player, target) then
+        return true
+    end
+    if combat.assist(player, target, scanned, mod) then
+        return true
+    end
+    if player and targeting and type(targeting.start_auto_attack) == "function" then
         targeting.start_auto_attack(player, target)
     end
-    if target then
-        pcall(function()
-            local movement = require("movement")
-            if movement and type(movement.face_combat) == "function" then
-                movement.face_combat(target)
-            end
-        end)
-    end
+    pcall(function()
+        local movement = require("movement")
+        if movement and type(movement.face_combat) == "function" then
+            movement.face_combat(target)
+        end
+    end)
     return mod.tick(player, target, ctx) == true
 end
 

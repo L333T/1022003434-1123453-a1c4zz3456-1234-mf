@@ -311,7 +311,8 @@ function healing.tick(player)
         if movement and type(movement.set_resting) == "function" then
             movement.set_resting(false)
         end
-        if gui.is_on("potions") then
+        local casting = safe(function() return player:is_channeling_or_casting() end) == true
+        if gui.is_on("potions") and not casting then
             if hp <= gui.slider("hp_pot", 35) then
                 izi.use_best_health_potion_safe()
             end

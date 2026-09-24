@@ -122,6 +122,15 @@ local function enemy_units(player, pos, range)
     return {}
 end
 
+--- Raw hostile list around the player, before any combat or level filtering.
+function targeting.enemy_list(player, range)
+    if not player then
+        return {}
+    end
+    local pos = state.cached_pos or safe(function() return player:get_position() end)
+    return enemy_units(player, pos, tonumber(range) or 40)
+end
+
 function targeting.find_mobs(player, mobs, range, pve_only, opts)
     local found = {}
     if not player then
@@ -226,31 +235,17 @@ function targeting.threat_nearby(player, yards)
     return false
 end
 
+--- Kept for every existing caller. The engine owns the scan so the pack arrives
+--- nearest-first and includes pet-held and instance mobs.
 function targeting.combat_scan(player, range)
-    local found = {}
-    if not player then
-        return found
-    end
-    local pos = state.cached_pos or safe(function() return player:get_position() end)
-    if not pos then
-        return found
-    end
-    local list = enemy_units(player, pos, range or 40)
-    if type(list) ~= "table" then
-        return found
-    end
-    local me_guid = safe(function() return player:get_guid() end)
-    for i = 1, #list do
-        local u = list[i]
-        if u and safe(function() return u:is_in_combat() end) == true and safe(function() return u:is_dead_or_ghost() end) ~= true then
-            local tar = safe(function() return u:get_target() end)
-            local tguid = tar and safe(function() return tar:get_guid() end)
-            if me_guid ~= nil and tguid == me_guid then
-                found[#found + 1] = u
-            end
+    local ok, combat = pcall(require, "combat")
+    if ok and type(combat) == "table" and type(combat.scan) == "function" then
+        local pack = combat.scan(player, range)
+        if type(pack) == "table" then
+            return pack
         end
     end
-    return found
+    return {}
 end
 
 function targeting.find_corpses(player, range)

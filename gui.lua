@@ -307,6 +307,25 @@ menu:slider_int("mfg_repair_pct", 5, 50, 10, {
     label = "Repair at Durability %",
     tab = "vendor",
 })
+menu:checkbox("mfg_buy_food", true, {
+    label = "Buy Food / Drink",
+    tab = "vendor",
+    tooltip = "While the merchant window is open, restock the highest-level food and drink the vendor sells that you can use.",
+})
+menu:slider_int("mfg_food_count", 0, 60, 20, {
+    label = "Keep Food Count",
+    tab = "vendor",
+})
+menu:slider_int("mfg_drink_count", 0, 60, 20, {
+    label = "Keep Drink Count",
+    tab = "vendor",
+    tooltip = "Ignored for classes with no mana pool.",
+})
+menu:text_input("mfg_keep_items", true, {
+    label = "Keep Item IDs",
+    tab = "vendor",
+    tooltip = "Comma-separated item IDs the bot will never sell. Food, drink, potions, and your hearthstone are already protected.",
+})
 
 menu:checkbox("mfg_show_gui", true, {
     label = "Show GUI",
@@ -372,6 +391,7 @@ local aliases = {
     loot_mine = "mfg_loot_mine",
     sell = "mfg_vendor_sell",
     repair = "mfg_repair",
+    buy_food = "mfg_buy_food",
     sell_grey = "mfg_sell_grey",
     sell_white = "mfg_sell_white",
     sell_green = "mfg_sell_green",
@@ -389,6 +409,8 @@ local aliases = {
     molten_armor = "mfg_molten_armor",
     ice_barrier = "mfg_ice_barrier",
     mana_shield = "mfg_mana_shield",
+    mana_gem = "mfg_mana_gem",
+    conjure_gems = "mfg_conjure_gems",
     icy_veins = "mfg_icy_veins",
     presence_of_mind = "mfg_presence_of_mind",
     combustion = "mfg_combustion",
@@ -421,12 +443,15 @@ local slider_aliases = {
     drink_mana = "mfg_drink_mana",
     hp_pot = "mfg_hp_pot",
     mp_pot = "mfg_mp_pot",
+    mana_gem_pct = "mfg_mana_gem_pct",
     max_kill = "mfg_max_kill",
     fight_back_hp = "mfg_fight_back_hp",
     fight_back_yards = "mfg_fight_back_yards",
     path_combat_yards = "mfg_path_combat_yards",
     bag_free = "mfg_bag_free",
     repair_pct = "mfg_repair_pct",
+    food_count = "mfg_food_count",
+    drink_count = "mfg_drink_count",
 }
 
 local function checkbox_element(key)
@@ -570,6 +595,14 @@ function gui.slider(key, fallback)
         return value
     end
     return fallback
+end
+
+function gui.keep_items()
+    local value = menu:get("mfg_keep_items")
+    if type(value) == "string" then
+        return value
+    end
+    return ""
 end
 
 function gui.get_menu()

@@ -36,6 +36,17 @@ consumables.CONJURE_WATER_SPELL_IDS = {
     5504,  -- Rank 1
 }
 
+-- Mana gems — conjure spell + created item, in the order they are conjured.
+-- Each gem is Unique, so one of each rank can be carried at the same time.
+-- restore = minimum mana returned per charge (patch 2.3.2 values).
+consumables.MANA_GEMS = {
+    { spell_id = 10054, item_id = 8008,  restore = 1073, label = "Conjure Mana Ruby",    item_label = "Mana Ruby" },
+    { spell_id = 10053, item_id = 8007,  restore = 829,  label = "Conjure Mana Citrine", item_label = "Mana Citrine" },
+    { spell_id = 3552,  item_id = 5513,  restore = 585,  label = "Conjure Mana Jade",    item_label = "Mana Jade" },
+    { spell_id = 759,   item_id = 5514,  restore = 390,  label = "Conjure Mana Agate",   item_label = "Mana Agate" },
+    { spell_id = 27101, item_id = 22044, restore = 2340, label = "Conjure Mana Emerald", item_label = "Mana Emerald" },
+}
+
 -- Conjured food item IDs (highest first)
 consumables.CONJURED_FOOD_ITEM_IDS = {
     22019, -- Conjured Croissant
